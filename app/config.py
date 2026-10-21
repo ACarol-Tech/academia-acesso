@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     app_env: str = "development"
     frontend_url: str
     db_host: str = "127.0.0.1"
@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     encryption_key: str
     hash_key: str
     webhook_secret: str
+    catraca_simulada: bool = False
     catraca_host: str
     catraca_user: str
     catraca_pass: str
