@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -17,6 +18,20 @@ app = FastAPI(title="Academia · Controle de acesso",
               openapi_url=None if settings.producao else "/openapi.json")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.exception_handler(RequestValidationError)
+async def erro_validacao(request: Request, exc: RequestValidationError):
+    """Devolve uma mensagem curta em vez da lista técnica de erros do pydantic."""
+    e = exc.errors()[0]
+    msg = str(e.get("msg", ""))
+    if msg.startswith("Value error, "):
+        texto = msg.removeprefix("Value error, ")
+    else:
+        texto = f"Dado inválido no campo '{e['loc'][-1]}'"
+    return JSONResponse(status_code=422, content={"detail": texto})
+
+
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=[settings.frontend_url], allow_credentials=True,
                    allow_methods=["GET", "POST", "PATCH", "DELETE"], allow_headers=["Content-Type"])

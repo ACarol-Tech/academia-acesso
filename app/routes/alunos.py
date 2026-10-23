@@ -8,12 +8,23 @@ from pydantic import BaseModel, Field, field_validator
 
 from ..db import agora, consultar, executar, novo_id, transacao, um
 from ..intelbras import cadastrar_face
-from ..security import cifrar, decifrar, exigir_login, hmac_hex, mascarar_cpf
+from ..security import cifrar, decifrar, exigir_admin, exigir_login, hmac_hex, mascarar_cpf
 
 router = APIRouter(dependencies=[Depends(exigir_login)])  # nenhuma rota daqui responde sem login
 
 
 FormaPagamento = Literal["PIX", "CARTAO_CREDITO", "DINHEIRO", "BOLETO"]
+
+
+def cpf_valido(cpf: str) -> bool:
+    """Confere os dois dígitos verificadores e recusa sequências como 111.111.111-11."""
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+    for tam in (9, 10):
+        soma = sum(int(cpf[i]) * (tam + 1 - i) for i in range(tam))
+        if (soma * 10 % 11) % 10 != int(cpf[tam]):
+            return False
+    return True
 
 
 class AlunoIn(BaseModel):
@@ -34,7 +45,7 @@ class AlunoIn(BaseModel):
     @classmethod
     def so_digitos(cls, v):
         v = re.sub(r"\D", "", v)
-        if len(v) != 11:
+        if not cpf_valido(v):
             raise ValueError("CPF inválido")
         return v
 
@@ -59,7 +70,7 @@ class AlunoPatch(BaseModel):
         if v is None:
             return v
         v = re.sub(r"\D", "", v)
-        if len(v) != 11:
+        if not cpf_valido(v):
             raise ValueError("CPF inválido")
         return v
 
@@ -175,7 +186,7 @@ def atualizar(aluno_id: str, d: AlunoPatch):
     return {"ok": True}
 
 
-@router.delete("/{aluno_id}", status_code=204)
+@router.delete("/{aluno_id}", status_code=204, dependencies=[Depends(exigir_admin)])
 def remover(aluno_id: str):
     atual = um("SELECT id, nome, ativo FROM alunos WHERE id=%s", (aluno_id,))
     if not atual:
