@@ -1,3 +1,4 @@
+import httpx
 import hmac
 
 from datetime import date, datetime, time, timedelta
@@ -46,12 +47,17 @@ def simular_evento(aluno_id: str, op: dict = Depends(exigir_login)):
 
 @router.post("/liberar-manual")
 def liberar(d: LiberarIn, op: dict = Depends(exigir_login)):
-    abrir_porta()
-    with transacao() as cur:
-        cur.execute("INSERT INTO log_liberacoes (id, aluno_id, operador_id, motivo, observacao) VALUES (%s,%s,%s,%s,%s)",
-                    (novo_id(), d.aluno_id, op["sub"], d.motivo, d.observacao))
-        cur.execute("INSERT INTO historico_acessos (id, aluno_id, resultado, motivo) VALUES (%s,%s,'LIBERADO_MANUAL',%s)",
-                    (novo_id(), d.aluno_id, d.motivo))
+    if not um("SELECT id FROM alunos WHERE id=%s AND ativo=TRUE", (d.aluno_id,)):
+        raise HTTPException(404, "Aluno não encontrado")
+    try:
+        with transacao() as cur:
+            cur.execute("INSERT INTO log_liberacoes (id, aluno_id, operador_id, motivo, observacao) VALUES (%s,%s,%s,%s,%s)",
+                        (novo_id(), d.aluno_id, op["sub"], d.motivo, d.observacao))
+            cur.execute("INSERT INTO historico_acessos (id, aluno_id, resultado, motivo) VALUES (%s,%s,'LIBERADO_MANUAL',%s)",
+                        (novo_id(), d.aluno_id, d.motivo))
+            abrir_porta()  # se a catraca falhar, nada fica gravado
+    except httpx.HTTPError:
+        raise HTTPException(502, "A catraca não respondeu. Nada foi registrado.")
     return {"ok": True}
 
 
