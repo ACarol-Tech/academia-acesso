@@ -1,4 +1,5 @@
 import re
+from .planos import somar_meses
 from datetime import date
 from decimal import Decimal
 from typing import Literal
@@ -39,6 +40,7 @@ class AlunoIn(BaseModel):
     valor_pago: Decimal
     data_pagamento: date
     forma_pagamento: FormaPagamento
+    meses: int | None = Field(default=None, ge=1, le=36)  # meses pagos; vazio = usa o vencimento enviado
     consentimento: Literal[True]  # LGPD: consentimento obrigatório
 
     @field_validator("cpf")
@@ -132,28 +134,44 @@ def detalhar(aluno_id: str):
 
 
 @router.post("", status_code=201)
-def criar(d: AlunoIn):
+def criar(d: AlunoIn, op: dict = Depends(exigir_login)):
     cpf_hash = hmac_hex(d.cpf)
-    if um("SELECT id FROM alunos WHERE cpf_hash=%s AND ativo=TRUE", (cpf_hash,)):
+    existente = um("SELECT id, codigo, ativo FROM alunos WHERE cpf_hash=%s", (cpf_hash,))
+    if existente and existente["ativo"]:
         raise HTTPException(409, "CPF já cadastrado")
-    if not um("SELECT id FROM planos WHERE id=%s", (d.plano_id,)):
+    plano = um("SELECT id, meses FROM planos WHERE id=%s", (d.plano_id,))
+    if not plano:
         raise HTTPException(400, "Plano inexistente")
-    aluno_id = novo_id()
-    cadastrar_face(aluno_id, d.nome, d.foto)  # se a catraca falhar, nada é salvo
+    meses = d.meses or plano["meses"]
+    vencimento = somar_meses(d.data_pagamento, d.meses) if d.meses else d.vencimento
+
     with transacao() as cur:
-        cur.execute("""INSERT INTO alunos
-                       (id, nome, cpf_cript, cpf_hash, foto_cript, intelbras_user_id, consentimento_lgpd_em,
-                        data_nascimento, endereco, telefone, ativo)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
-                    (aluno_id, d.nome, cifrar(d.cpf), cpf_hash, cifrar(d.foto), aluno_id, agora(),
-                     d.data_nascimento, d.endereco, d.telefone))
+        if existente:  # aluno que voltou: reativa o cadastro antigo e mantém o histórico
+            aluno_id = existente["id"]
+            cur.execute("""UPDATE alunos SET ativo=TRUE, nome=%s, foto_cript=%s, consentimento_lgpd_em=%s,
+                           data_nascimento=%s, endereco=%s, telefone=%s WHERE id=%s""",
+                        (d.nome, cifrar(d.foto), agora(), d.data_nascimento, d.endereco, d.telefone, aluno_id))
+        else:
+            aluno_id = novo_id()
+            cur.execute("""INSERT INTO alunos
+                           (id, nome, cpf_cript, cpf_hash, foto_cript, consentimento_lgpd_em,
+                            data_nascimento, endereco, telefone, ativo)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
+                        (aluno_id, d.nome, cifrar(d.cpf), cpf_hash, cifrar(d.foto), agora(),
+                         d.data_nascimento, d.endereco, d.telefone))
+        cur.execute("SELECT codigo FROM alunos WHERE id=%s", (aluno_id,))
+        codigo = cur.fetchone()["codigo"]
+        cur.execute("UPDATE alunos SET intelbras_user_id=%s WHERE id=%s", (str(codigo), aluno_id))
         matricula_id = novo_id()
         cur.execute("INSERT INTO matriculas (id, aluno_id, plano_id, vencimento) VALUES (%s,%s,%s,%s)",
-                    (matricula_id, aluno_id, d.plano_id, d.vencimento))
+                    (matricula_id, aluno_id, d.plano_id, vencimento))
         cur.execute("""INSERT INTO pagamentos
-                       (id, aluno_id, matricula_id, plano_id, valor, data_pagamento, forma_pagamento)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                    (novo_id(), aluno_id, matricula_id, d.plano_id, d.valor_pago, d.data_pagamento, d.forma_pagamento))
+                       (id, aluno_id, matricula_id, plano_id, valor, data_pagamento, forma_pagamento, meses, operador_id)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (novo_id(), aluno_id, matricula_id, d.plano_id, d.valor_pago, d.data_pagamento,
+                     d.forma_pagamento, meses, op["sub"]))
+        # por último: se a catraca falhar, tudo acima é desfeito e nada fica salvo
+        cadastrar_face(str(codigo), d.nome, d.foto)
     return {"id": aluno_id}
 
 
