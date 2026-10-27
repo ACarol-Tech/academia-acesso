@@ -1,0 +1,15 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?defina DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: academia
+      MYSQL_USER: academia
+      MYSQL_PASSWORD: ${DB_PASSWORD:?defina DB_PASSWORD}
+    ports: ["127.0.0.1:3306:3306"]   # só acessível neste computador
+    volumes:
+      - dbdata:/var/lib/mysql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+volumes:
+  dbdata:
