@@ -51,6 +51,7 @@ CREATE TABLE matriculas (
   vencimento DATE NOT NULL,
   criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX (aluno_id),
+  INDEX idx_aluno_status (aluno_id, status), -- Índice composto para validação rápida na catraca
   FOREIGN KEY (aluno_id) REFERENCES alunos(id),
   FOREIGN KEY (plano_id) REFERENCES planos(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
