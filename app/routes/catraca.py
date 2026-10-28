@@ -1,4 +1,3 @@
-import httpx
 import hmac
 
 from datetime import date, datetime, time, timedelta
@@ -9,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..acesso import processar
 from ..config import settings
-from ..db import novo_id, transacao, um, consultar
-from ..intelbras import abrir_porta
+from ..db import consultar, data_hoje, novo_id, transacao, um
+from ..intelbras import abrir_porta, status_leitores
 from ..realtime import manager
 from ..security import exigir_login
 
@@ -37,8 +36,16 @@ async def evento(dados: EventoIn, x_webhook_secret: str = Header(default="")):
         await manager.enviar({"tipo": "novo_acesso", **r})
 
 
+@router.get("/leitores/status")
+async def status_dos_leitores(_: dict = Depends(exigir_login)):
+    """Só leitura: mostra se cada leitor (entrada e saída) está online."""
+    return await run_in_threadpool(status_leitores)
+
+
 @router.post("/simular-evento")
 def simular_evento(aluno_id: str, op: dict = Depends(exigir_login)):
+    if settings.producao:  # em produção ninguém cria acessos falsos no histórico
+        raise HTTPException(404)
     aluno = um("SELECT id, intelbras_user_id FROM alunos WHERE id=%s AND ativo=TRUE", (aluno_id,))
     if not aluno or not aluno["intelbras_user_id"]:
         raise HTTPException(404, "Aluno sem identificador da catraca")
@@ -49,15 +56,12 @@ def simular_evento(aluno_id: str, op: dict = Depends(exigir_login)):
 def liberar(d: LiberarIn, op: dict = Depends(exigir_login)):
     if not um("SELECT id FROM alunos WHERE id=%s AND ativo=TRUE", (d.aluno_id,)):
         raise HTTPException(404, "Aluno não encontrado")
-    try:
-        with transacao() as cur:
-            cur.execute("INSERT INTO log_liberacoes (id, aluno_id, operador_id, motivo, observacao) VALUES (%s,%s,%s,%s,%s)",
-                        (novo_id(), d.aluno_id, op["sub"], d.motivo, d.observacao))
-            cur.execute("INSERT INTO historico_acessos (id, aluno_id, resultado, motivo) VALUES (%s,%s,'LIBERADO_MANUAL',%s)",
-                        (novo_id(), d.aluno_id, d.motivo))
-            abrir_porta()  # se a catraca falhar, nada fica gravado
-    except httpx.HTTPError:
-        raise HTTPException(502, "A catraca não respondeu. Nada foi registrado.")
+    with transacao() as cur:
+        cur.execute("INSERT INTO log_liberacoes (id, aluno_id, operador_id, motivo, observacao) VALUES (%s,%s,%s,%s,%s)",
+                    (novo_id(), d.aluno_id, op["sub"], d.motivo, d.observacao))
+        cur.execute("INSERT INTO historico_acessos (id, aluno_id, resultado, motivo) VALUES (%s,%s,'LIBERADO_MANUAL',%s)",
+                    (novo_id(), d.aluno_id, d.motivo))
+        abrir_porta()  # se o leitor falhar, nada fica gravado
     return {"ok": True}
 
 
@@ -69,7 +73,7 @@ def historico(
     _: dict = Depends(exigir_login),
 ):
     if not inicio:
-        inicio = date.today()
+        inicio = data_hoje()
     if not fim:
         fim = inicio
     fim_exclusivo = datetime.combine(fim + timedelta(days=1), time.min)
@@ -86,7 +90,7 @@ def historico(
 
 @router.get("/dashboard")
 def dashboard(_: dict = Depends(exigir_login)):
-    hoje = date.today()
+    hoje = data_hoje()
     inicio = datetime.combine(hoje, time.min)
     fim = datetime.combine(hoje + timedelta(days=1), time.min)
     r = um("""SELECT

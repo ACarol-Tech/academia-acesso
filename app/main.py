@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from .config import settings
+from .intelbras import FalhaLeitor
 from .limite import limiter
 from .realtime import manager
 from .routes import alunos, auth, catraca, planos, relatorios, usuarios
@@ -30,6 +31,11 @@ async def erro_validacao(request: Request, exc: RequestValidationError):
     else:
         texto = f"Dado inválido no campo '{e['loc'][-1]}'"
     return JSONResponse(status_code=422, content={"detail": texto})
+
+
+@app.exception_handler(FalhaLeitor)
+async def falha_leitor(request: Request, exc: FalhaLeitor):
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 app.add_middleware(SlowAPIMiddleware)

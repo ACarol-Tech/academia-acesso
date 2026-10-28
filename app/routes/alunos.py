@@ -1,6 +1,5 @@
 import re
-from .planos import somar_meses
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
 
@@ -8,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from ..db import agora, consultar, executar, novo_id, transacao, um
-from ..intelbras import cadastrar_face
+from ..intelbras import cadastrar_face, remover_usuario
 from ..security import cifrar, decifrar, exigir_admin, exigir_login, hmac_hex, mascarar_cpf
+from .planos import somar_meses
 
 router = APIRouter(dependencies=[Depends(exigir_login)])  # nenhuma rota daqui responde sem login
 
@@ -36,7 +36,7 @@ class AlunoIn(BaseModel):
     telefone: str | None = Field(default=None, max_length=30)
     plano_id: str
     vencimento: date
-    foto: str = Field(max_length=300_000)  # JPEG em base64, sem o prefixo data:
+    foto: str = Field(max_length=4_000_000)  # imagem em base64, sem o prefixo data:; é reduzida antes de ir ao leitor
     valor_pago: Decimal
     data_pagamento: date
     forma_pagamento: FormaPagamento
@@ -139,11 +139,12 @@ def criar(d: AlunoIn, op: dict = Depends(exigir_login)):
     existente = um("SELECT id, codigo, ativo FROM alunos WHERE cpf_hash=%s", (cpf_hash,))
     if existente and existente["ativo"]:
         raise HTTPException(409, "CPF já cadastrado")
-    plano = um("SELECT id, meses FROM planos WHERE id=%s", (d.plano_id,))
+    plano = um("SELECT id, meses, dias_tolerancia FROM planos WHERE id=%s", (d.plano_id,))
     if not plano:
         raise HTTPException(400, "Plano inexistente")
     meses = d.meses or plano["meses"]
     vencimento = somar_meses(d.data_pagamento, d.meses) if d.meses else d.vencimento
+    validade = vencimento + timedelta(days=plano["dias_tolerancia"])  # até quando o leitor deixa entrar
 
     with transacao() as cur:
         if existente:  # aluno que voltou: reativa o cadastro antigo e mantém o histórico
@@ -170,8 +171,8 @@ def criar(d: AlunoIn, op: dict = Depends(exigir_login)):
                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (novo_id(), aluno_id, matricula_id, d.plano_id, d.valor_pago, d.data_pagamento,
                      d.forma_pagamento, meses, op["sub"]))
-        # por último: se a catraca falhar, tudo acima é desfeito e nada fica salvo
-        cadastrar_face(str(codigo), d.nome, d.foto)
+        # por último: se o leitor falhar, tudo acima é desfeito e nada fica salvo
+        cadastrar_face(str(codigo), d.nome, d.foto, validade)
     return {"id": aluno_id}
 
 
@@ -206,11 +207,13 @@ def atualizar(aluno_id: str, d: AlunoPatch):
 
 @router.delete("/{aluno_id}", status_code=204, dependencies=[Depends(exigir_admin)])
 def remover(aluno_id: str):
-    atual = um("SELECT id, nome, ativo FROM alunos WHERE id=%s", (aluno_id,))
+    atual = um("SELECT id, nome, ativo, codigo FROM alunos WHERE id=%s", (aluno_id,))
     if not atual:
         raise HTTPException(404, "Aluno não encontrado")
     if not atual["ativo"]:
         raise HTTPException(409, "Aluno já excluído")
+
+    remover_usuario(str(atual["codigo"]))  # se o leitor falhar, não exclui: o rosto não pode ficar lá
 
     # Exclusão lógica: preserva pagamentos, acessos e liberações para auditoria.
     with transacao() as cur:

@@ -16,12 +16,16 @@ class Settings(BaseSettings):
     webhook_secret: str
     catraca_simulada: bool = False
     catraca_host: str
+    catraca_host_saida: str = ""
+    catraca_https: bool = False
     catraca_user: str
     catraca_pass: str
-    catraca_path_abrir: str
-    catraca_path_usuario: str
+    catraca_path_abrir: str = ""      # não usados mais: os comandos ficam em app/intelbras.py
+    catraca_path_usuario: str = ""
     seed_email: str | None = None
     seed_senha: str | None = None
+    seed_admin_email: str | None = None
+    seed_admin_senha: str | None = None
 
     @property
     def producao(self) -> bool:
