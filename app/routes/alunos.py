@@ -133,14 +133,10 @@ def criar(d: AlunoIn):
         raise HTTPException(400, "Plano inexistente")
     
     aluno_id = novo_id()
-    
-    # Só aciona a catraca Intelbras se houver foto enviada
-    if d.foto:
-        cadastrar_face(aluno_id, d.nome, d.foto)
-
     foto_criptografada = cifrar(d.foto) if d.foto else None
     consentimento_data = agora() if d.consentimento else None
 
+    # 1. Transação atômica para garantir consistência no Banco de Dados
     with transacao() as cur:
         cur.execute("""INSERT INTO alunos
                         (id, nome, cpf_cript, cpf_hash, foto_cript, intelbras_user_id, consentimento_lgpd_em,
@@ -148,13 +144,23 @@ def criar(d: AlunoIn):
                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE)""",
                     (aluno_id, d.nome, cifrar(d.cpf), cpf_hash, foto_criptografada, aluno_id, consentimento_data,
                      d.data_nascimento, d.endereco, d.telefone))
+        
         matricula_id = novo_id()
         cur.execute("INSERT INTO matriculas (id, aluno_id, plano_id, vencimento) VALUES (%s,%s,%s,%s)",
                     (matricula_id, aluno_id, d.plano_id, d.vencimento))
+        
         cur.execute("""INSERT INTO pagamentos
                         (id, aluno_id, matricula_id, plano_id, valor, data_pagamento, forma_pagamento)
                         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                     (novo_id(), aluno_id, matricula_id, d.plano_id, d.valor_pago, d.data_pagamento, d.forma_pagamento))
+
+    # 2. Integração externa com a catraca Intelbras após o sucesso no banco
+    if d.foto:
+        try:
+            cadastrar_face(aluno_id, d.nome, d.foto)
+        except Exception as e:
+            print(f"⚠️ Aviso: Aluno criado no sistema, mas houve falha na sincronização com a catraca Intelbras: {e}")
+
     return {"id": aluno_id}
 
 
@@ -197,5 +203,5 @@ def remover(aluno_id: str):
 
     with transacao() as cur:
         cur.execute("UPDATE alunos SET ativo=FALSE WHERE id=%s", (aluno_id,))
-        cur.execute("UPDATE matriculas SET status='CANCELADO' WHERE aluno_id=%s AND status<>'CANCELADO'", (aluno_id,))
+        cur.execute("UPDATE matriculas SET status='CANCELADO' WHERE aluno_id=%s AND status<!='CANCELADO'", (aluno_id,))
     return None
